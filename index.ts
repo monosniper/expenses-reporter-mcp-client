@@ -1,21 +1,15 @@
-import dotenv from "dotenv";
+import "dotenv/config";
 import MCPClient from "./mcp.js";
-import {Telegraf} from "telegraf";
 import {message} from "telegraf/filters";
-
-dotenv.config();
+import bot from "./bot.js";
+import {handleAudio, handleMessage} from "./handlers.js";
 
 (async () => {
 	try {
-		// @ts-ignore
-		const bot = new Telegraf(process.env.BOT_TOKEN)
-		await MCPClient.connect(process.env.MCP_URL || '');
+		await MCPClient.connect();
 
-		bot.on(message('text'), async (ctx) => {
-			const answer = await MCPClient.processQuery(ctx.update.message.text, '')
-
-			await ctx.reply(answer)
-		})
+		bot.on(message('voice'), handleAudio)
+		bot.on(message('text'), handleMessage)
 
 		await bot.launch()
 

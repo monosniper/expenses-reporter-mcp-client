@@ -14,9 +14,13 @@ class MCPClient {
 		});
 	}
 
-	async connect(url: string) {
+	async connect() {
 		try {
-			this.transport = new StreamableHTTPClientTransport(new URL(url));
+			if (typeof process.env.MCP_URL !== 'string') {
+				throw new Error('MCP_URL environment variable is missing');
+			}
+
+			this.transport = new StreamableHTTPClientTransport(new URL(process.env.MCP_URL));
 			await this.mcp.connect(this.transport);
 
 			const toolsResult = await this.mcp.listTools();
@@ -35,6 +39,15 @@ class MCPClient {
 			console.log("Failed to connect to MCP server: ", e);
 			throw e;
 		}
+	}
+
+	async call(tool_name: string, args: any): Promise<string> {
+		const result = await this.mcp.callTool({
+			name: tool_name,
+			arguments: args,
+		});
+
+		return result.content as string;
 	}
 
 	async processQuery(query: string, telegramId: string) {
