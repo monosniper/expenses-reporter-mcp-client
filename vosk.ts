@@ -1,70 +1,97 @@
-import WebSocket from 'ws';
-import fs from 'fs';
-import path from 'path';
+import { spawn } from 'child_process';
+import process from 'process';
 
 if (typeof process.env.VOSK_HOST_RU !== 'string' || typeof process.env.VOSK_HOST_UZ !== 'string') {
 	throw new Error('VOSK_HOST_RU or VOSK_HOST_UZ environment variable is missing');
 }
 
 class VoskClient {
-	private createClient(host: string): { ws: WebSocket; ready: Promise<void> } {
-		const ws = new WebSocket(host);
-		const ready = new Promise<void>((resolve, reject) => {
-			ws.on('open', () => resolve());
-			ws.on('error', reject);
-		});
-		return { ws, ready };
-	}
-
-	private async transcribe(ws: WebSocket, ready: Promise<void>, filePath: string): Promise<string> {
-		await ready;
-
+	private async runPython(filePath: string, voskHost: string): Promise<{ text: string; conf: number }> {
 		return new Promise((resolve, reject) => {
-			let text = '';
+			const child = spawn('python3', ['./vosk.py', filePath, voskHost]);
+			let buffer = '';
+			let currentJson = '';
+			let braceCount = 0;
+			let lastText = '';
+			let lastConf = 0;
+			let stderrBuffer = '';
 
-			ws.on('message', (data: any) => {
-				try {
-					const msg = JSON.parse(data.toString());
-					if (msg.text) {
-						text = msg.text.trim();
+			child.stdout.on('data', (chunk) => {
+				buffer += chunk.toString();
+
+				for (const char of buffer) {
+					if (char === '{') braceCount++;
+					if (braceCount > 0) currentJson += char;
+					if (char === '}') braceCount--;
+
+					if (braceCount === 0 && currentJson.trim()) {
+						try {
+							const json = JSON.parse(currentJson);
+
+							if (json.text) {
+								lastText = json.text;
+								if (typeof json.conf === 'number') lastConf = json.conf;
+							}
+						} catch (e) {
+							console.warn('[PARSE ERROR]', e);
+							console.warn('[BROKEN JSON]', currentJson);
+						}
+						currentJson = '';
 					}
-				} catch {
-					// игнорируем не-json
 				}
+
+				// очищаем только если JSON полностью закрыт
+				if (braceCount === 0) buffer = '';
 			});
 
-			ws.on('close', () => resolve(text));
+			child.stderr.on('data', (data) => {
+				stderrBuffer += data.toString();
+				console.error('[PYTHON ERROR]', data.toString().trim());
+			});
 
-			const readStream = fs.createReadStream(path.resolve(filePath));
-			readStream.on('data', chunk => ws.send(chunk));
-			readStream.on('end', () => ws.send(JSON.stringify({ eof: 1 })));
-			readStream.on('error', reject);
+			child.on('close', (code) => {
+				if (code !== 0) {
+					return reject(new Error(`Python exited with code ${code}: ${stderrBuffer}`));
+				}
+				if (!lastText) {
+					return reject(new Error(`No transcription result. Stderr:\n${stderrBuffer}`));
+				}
+				resolve({ text: lastText, conf: lastConf });
+			});
+
+			child.on('error', (err) => reject(err));
+
+			// safety timeout
+			setTimeout(() => {
+				child.kill();
+				reject(new Error('Python process timeout'));
+			}, 60_000);
 		});
 	}
 
 	async voiceToText(filePath: string): Promise<string> {
-		const ru = this.createClient(process.env.VOSK_HOST_RU as string);
-		const uz = this.createClient(process.env.VOSK_HOST_UZ as string);
+		console.log(`Starting transcription for file: ${filePath}`);
 
-		const [ruText, uzText] = await Promise.allSettled([
-			this.transcribe(ru.ws, ru.ready, filePath),
-			this.transcribe(uz.ws, uz.ready, filePath),
-		]);
+		try {
+			const ru = await this.runPython(filePath, process.env.VOSK_HOST_RU as string);
+			const uz = await this.runPython(filePath, process.env.VOSK_HOST_UZ as string);
 
-		ru.ws.close();
-		uz.ws.close();
+			console.log('Final results:');
+			console.log('RU:', ru.text, `(conf: ${ru.conf})`);
+			console.log('UZ:', uz.text, `(conf: ${uz.conf})`);
 
-		const ruResult = ruText.status === 'fulfilled' ? ruText.value : '';
-		const uzResult = uzText.status === 'fulfilled' ? uzText.value : '';
+			if (!ru.text && !uz.text) {
+				throw new Error('No transcription result from either host');
+			}
 
-		if (!ruResult && !uzResult) {
-			throw new Error('No transcription result from either host');
+			// выбираем по средней уверенности
+			return ru.conf >= uz.conf ? ru.text : uz.text;
+		} catch (err) {
+			console.error('Transcription error:', err);
+			throw err;
 		}
-
-		return ruResult.length >= uzResult.length ? ruResult : uzResult;
 	}
 }
 
 const Vosk = new VoskClient();
-
 export default Vosk;

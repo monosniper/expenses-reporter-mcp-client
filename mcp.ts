@@ -45,13 +45,29 @@ class MCPClient {
 		const result = await this.mcp.callTool({
 			name: tool_name,
 			arguments: args,
+			headers: {
+				'X-Telegram-Id': 1,
+				'X-Telegram-Name': 'Ravil',
+			}
 		});
 
 		return result.content as string;
 	}
 
-	async processQuery(query: string, telegramId: string) {
+	async processQuery(query: string, tgId: number) {
+		const _prevMessages = await this.call('messages_get', {
+			limit: 9,
+			tgId
+		})
+
+		// @ts-ignore
+		const prevMessages = JSON.parse(_prevMessages[0].text).messages.map((message: any) => ({
+			role: message.role,
+			content: message.content
+		}))
+
 		const messages: { role: string; content: string }[] = [
+			...prevMessages,
 			{ role: "user", content: query },
 		];
 
