@@ -5,8 +5,15 @@ import {magenta} from "console-log-colors";
 if (typeof process.env.VOSK_HOST_RU !== 'string' || typeof process.env.VOSK_HOST_UZ !== 'string') {
 	throw new Error('VOSK_HOST_RU or VOSK_HOST_UZ environment variable is missing');
 }
+import {consola, ConsolaInstance} from "consola";
 
 class VoskClient {
+	private logger: ConsolaInstance;
+
+	constructor() {
+		this.logger = consola.withTag('VOSK')
+	}
+
 	private async runPython(filePath: string, voskHost: string): Promise<{ text: string; conf: number }> {
 		return new Promise((resolve, reject) => {
 			const child = spawn('python3', ['./vosk.py', filePath, voskHost]);
@@ -34,8 +41,8 @@ class VoskClient {
 								if (typeof json.conf === 'number') lastConf = json.conf;
 							}
 						} catch (e) {
-							console.warn('[PARSE ERROR]', e);
-							console.warn('[BROKEN JSON]', currentJson);
+							this.logger.warn(`[PARSE ERROR] ${e}`)
+							this.logger.warn(`[BROKEN JSON] ${currentJson}`)
 						}
 						currentJson = '';
 					}
@@ -47,7 +54,7 @@ class VoskClient {
 
 			child.stderr.on('data', (data) => {
 				stderrBuffer += data.toString();
-				console.error('[PYTHON ERROR]', data.toString().trim());
+				this.logger.error(`[PYTHON ERROR] ${data.toString().trim()}`)
 			});
 
 			child.on('close', (code) => {
@@ -71,14 +78,14 @@ class VoskClient {
 	}
 
 	async voiceToText(filePath: string): Promise<string> {
-		console.log(`${magenta('[VOSK]')} Starting transcription for file: ${filePath}`);
+		this.logger.start(`Starting transcription for file: ${filePath}`)
 
 		try {
 			const ru = await this.runPython(filePath, process.env.VOSK_HOST_RU as string);
 			const uz = await this.runPython(filePath, process.env.VOSK_HOST_UZ as string);
 
-			console.log(`${magenta('[VOSK]')} RU:`, ru.text, `(conf: ${ru.conf})`);
-			console.log(`${magenta('[VOSK]')} UZ:`, uz.text, `(conf: ${uz.conf})`);
+			this.logger.info(`${magenta('[RU]')} ${ru.text} (conf: ${ru.conf})`)
+			this.logger.info(`${magenta('[UZ]')} ${uz.text} (conf: ${ru.conf})`)
 
 			if (!ru.text && !uz.text) {
 				throw new Error('No transcription result from either host');
@@ -87,7 +94,7 @@ class VoskClient {
 			// выбираем по средней уверенности
 			return ru.conf >= uz.conf ? ru.text : uz.text;
 		} catch (err) {
-			console.error('Transcription error:', err);
+			this.logger.error(`Transcription error: ${err}`)
 			throw err;
 		}
 	}

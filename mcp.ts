@@ -1,9 +1,10 @@
 import {Client} from "@modelcontextprotocol/sdk/client/index.js";
 import {StreamableHTTPClientTransport} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import OpenAI from "openai";
-import { yellow } from 'console-log-colors';
+import { yellow, grey } from 'console-log-colors';
 import process from "process";
 import LLMClient from "./llm.js";
+import {consola, ConsolaInstance} from "consola";
 import {
 	ResponseInput,
 	ResponseInputItem,
@@ -27,12 +28,14 @@ class MCPClient {
 		'messages_get',
 		'messages_post',
 	]
+	private logger: ConsolaInstance;
 
 	constructor() {
 		this.mcp = new Client({
 			name: "mcp-client",
 			version: "1.0.0",
 		});
+		this.logger = consola.withTag('MCP')
 	}
 
 	setTgId(id: number) {
@@ -61,23 +64,37 @@ class MCPClient {
 				strict: false,
 			}));
 
-			console.log(
-				"Connected to MCP server with tools:",
-				this.tools.map((t) => t.name)
-			);
+			this.logger.success('Connected to MCP server')
+			this.logger.box({
+				title: 'Tools',
+				message: this.tools
+					.map((t) => {
+						let desc = (t.description || '')
+							.replace(/\r?\n/g, ' ')      // убрать переносы строк
+							.replace(/\*\*/g, '')        // убрать markdown-выделения
+							.replace(/\s+/g, ' ')         // убрать лишние пробелы
+							.trim();
+
+						if (desc.length > 100) {
+							desc = desc.slice(0, 60) + '…';
+						}
+
+						return `${yellow(t.name)} - ${grey(desc)}`;
+					})
+					.join('\n'),
+				style: {
+					padding: 1,
+					borderColor: 'yellow',
+				}
+			})
 
 			LLMClient.setTools(this.tools)
 		} catch (e) {
-			console.error("Failed to connect to MCP server:", e);
-			throw e;
+			throw new Error(`Failed to connect to MCP server: ${e}`);
 		}
 	}
 
 	async call(toolName: string, args: any): Promise<MCPCallResult> {
-		if (!this.SYSTEM_MCP_CALLS.includes(toolName)) {
-			console.log(`${yellow('[MCP Call]')} ${toolName}: ${JSON.stringify(args)}`);
-		}
-
 		const response = await this.mcp.callTool({
 			name: toolName,
 			arguments: args,
@@ -87,13 +104,27 @@ class MCPClient {
 			},
 		});
 
+		// @ts-ignore
+		const result = response.content[0] as MCPCallResult;
+
 		if (!this.SYSTEM_MCP_CALLS.includes(toolName)) {
-			// @ts-ignore
-			console.log(`${yellow('[MCP Result]')} ${toolName}: ${JSON.stringify(response.content[0])}`);
+			this.logger.box({
+				title: toolName,
+				style: {
+					padding: 1,
+					borderColor: 'yellow',
+				},
+				message: [
+					`ARGS:`,
+					grey(JSON.stringify(args, null, 2)),
+					``,
+					`Result:`,
+					grey(JSON.stringify(JSON.parse(result.text), null, 2))
+				].join('\n')
+			});
 		}
 
-		// @ts-ignore
-		return response.content[0] as MCPCallResult;
+		return result;
 	}
 
 	async getPreviousMessages(): Promise<ResponseInput> {
@@ -107,7 +138,7 @@ class MCPClient {
 				content: String(msg.content),
 			}));
 		} catch (err) {
-			console.error("Failed to parse previous messages:", err);
+			this.logger.error(`Failed to parse previous messages: ${err}`)
 		}
 
 		return prevMessages.reverse();

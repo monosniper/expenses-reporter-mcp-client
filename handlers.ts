@@ -6,12 +6,16 @@ import Vosk from "./vosk.js";
 import fs from "fs";
 import { unlink } from 'fs/promises';
 import {green, grey} from "console-log-colors";
+import {consola} from "consola";
+
+const loggerUser = consola.withTag('USER')
+const loggerAssistant = consola.withTag('ASSISTANT')
 
 const handleMessage = async (ctx: any) => {
 	MCPClient.setTgId(ctx.update.message.chat.id);
 
 	const content = ctx.update.message.text;
-	console.log(`${grey('[USER]')} ${content}`)
+	loggerUser.info(grey(content))
 
 	if (content) {
 		const answer = await MCPClient.processQuery(content, 1)
@@ -27,7 +31,7 @@ const handleMessage = async (ctx: any) => {
 			]
 		})
 
-		console.log(`${green('[ASSISTANT]')} ${answer}`)
+		loggerAssistant.info(green(answer))
 	}
 }
 
