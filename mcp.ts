@@ -1,120 +1,160 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import ollama, {ChatResponse} from 'ollama'
+import {Client} from "@modelcontextprotocol/sdk/client/index.js";
+import {StreamableHTTPClientTransport} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import OpenAI from "openai";
+import { yellow } from 'console-log-colors';
+import process from "process";
+import LLMClient from "./llm.js";
+import {
+	ResponseInput,
+	ResponseInputItem,
+	ResponseFunctionToolCall,
+	ResponseOutputMessage,
+	ResponseOutputText, ResponseOutputItem
+} from "openai/resources/responses/responses";
+import bot from "./bot.js";
+import {sendFileFromUrl} from "./utils.js";
+
+interface MCPCallResult {
+	text: string;
+}
 
 class MCPClient {
 	private mcp: Client;
 	private transport: StreamableHTTPClientTransport | null = null;
-	private tools: any = [];
+	private tools: OpenAI.Responses.FunctionTool[] = [];
+	private tgId: number = 0;
 
 	constructor() {
 		this.mcp = new Client({
 			name: "mcp-client",
-			version: "1.0.0"
+			version: "1.0.0",
 		});
 	}
 
-	async connect() {
-		try {
-			if (typeof process.env.MCP_URL !== 'string') {
-				throw new Error('MCP_URL environment variable is missing');
-			}
+	setTgId(id: number) {
+		this.tgId = id;
+	}
 
+	async connect(): Promise<void> {
+		if (typeof process.env.MCP_URL !== "string") {
+			throw new Error("MCP_URL environment variable is missing");
+		}
+
+		try {
 			this.transport = new StreamableHTTPClientTransport(new URL(process.env.MCP_URL));
 			await this.mcp.connect(this.transport);
 
 			const toolsResult = await this.mcp.listTools();
-			this.tools = toolsResult.tools.map((tool) => {
-				return {
-					name: tool.name,
-					description: tool.description,
-					input_schema: tool.inputSchema,
-				};
-			});
+
+			this.tools = toolsResult.tools.map((tool) => ({
+				type: "function",
+				name: tool.name || "",
+				description: tool.description || "",
+				parameters: {
+					...tool.inputSchema,
+					additionalProperties: false,
+				},
+				strict: false,
+			}));
+
 			console.log(
 				"Connected to MCP server with tools:",
-				this.tools.map((t: { name: any; }) => t.name)
+				this.tools.map((t) => t.name)
 			);
+
+			LLMClient.setTools(this.tools)
 		} catch (e) {
-			console.log("Failed to connect to MCP server: ", e);
+			console.error("Failed to connect to MCP server:", e);
 			throw e;
 		}
 	}
 
-	async call(tool_name: string, args: any): Promise<string> {
-		const result = await this.mcp.callTool({
-			name: tool_name,
+	async call(toolName: string, args: any): Promise<MCPCallResult> {
+		console.log(`${yellow('[MCP Call]')} ${toolName}: ${JSON.stringify(args)}`);
+
+		const response = await this.mcp.callTool({
+			name: toolName,
 			arguments: args,
 			headers: {
-				'X-Telegram-Id': 1,
-				'X-Telegram-Name': 'Ravil',
-			}
+				"X-Telegram-Id": "1",
+				"X-Telegram-Name": "Ravil",
+			},
 		});
-
-		return result.content as string;
-	}
-
-	async processQuery(query: string, tgId: number) {
-		const _prevMessages = await this.call('messages_get', {
-			limit: 9,
-			tgId
-		})
 
 		// @ts-ignore
-		const prevMessages = JSON.parse(_prevMessages[0].text).messages.map((message: any) => ({
-			role: message.role,
-			content: message.content
-		}))
+		console.log(`${yellow('[MCP Result]')} ${toolName}: ${JSON.stringify(response.content[0])}`);
 
-		const messages: { role: string; content: string }[] = [
-			...prevMessages,
-			{ role: "user", content: query },
-		];
+		// @ts-ignore
+		return response.content[0] as MCPCallResult;
+	}
 
-		const response: ChatResponse = await ollama.chat({
-			model: process.env.LLM_MODEL || '',
-			messages,
-			think: false
-		});
+	async getPreviousMessages(): Promise<ResponseInput> {
+		const prevMessagesRaw = await this.call("messages_get", { limit: 9, tgId: 1 });
 
-		const finalText: string[] = [];
-
-		// основной текст от модели
-		if (response.message.content) {
-			finalText.push(response.message.content);
+		let prevMessages = [];
+		try {
+			const parsed = JSON.parse(prevMessagesRaw.text);
+			prevMessages = (parsed.messages ?? []).map((msg: any) => ({
+				role: msg.role as "system" | "user" | "assistant",
+				content: String(msg.content),
+			}));
+		} catch (err) {
+			console.error("Failed to parse previous messages:", err);
 		}
 
-		// проверяем, есть ли tool_calls
-		if (response.message.tool_calls && response.message.tool_calls.length > 0) {
-			for (const toolCall of response.message.tool_calls) {
-				const toolName = toolCall.function.name;
-				const toolArgs = toolCall.function.arguments;
+		return prevMessages.reverse();
+	}
 
-				finalText.push(
-					`[Calling tool ${toolName} with args ${JSON.stringify(toolArgs)}]`
-				);
+	async processQuery(query: string, tgId: number): Promise<string> {
+		LLMClient.addPrevMessages(await this.getPreviousMessages())
+		LLMClient.addMessage({
+			role: 'user',
+			content: query
+		} as ResponseInputItem)
 
-				// вызываем MCP-инструмент
-				const result = await this.mcp.callTool({
-					name: toolName,
-					arguments: toolArgs,
-				});
+		let response: OpenAI.Responses.Response = await LLMClient.call();
 
-				// кладем результат в messages для контекста
-				messages.push({
-					role: "user",
-					content: result.content as string,
-				});
+		const answer = await this.processOutput(response.output);
+		LLMClient.addAssistantMessage(answer)
 
-				// добавляем в финальный вывод
-				finalText.push(result.content as string);
+		return answer;
+	}
+
+	async processToolCall(item: ResponseFunctionToolCall) {
+		LLMClient.addMessage(item);
+
+		const result = await this.call(item.name, JSON.parse(item.arguments));
+		const jsonResult = JSON.parse(result.text)
+		if (jsonResult.hasOwnProperty("type") && jsonResult.hasOwnProperty("url")) {
+			try	{
+				await sendFileFromUrl(this.tgId, jsonResult.url);
+				result.text = 'Файл успешно отправлен пользователю'
+			} catch {
+				result.text = 'Не удалось скачать файл'
 			}
 		}
 
-		return finalText.join("\n");
+		LLMClient.addMessage({
+			type: 'function_call_output',
+			call_id: item.call_id,
+			output: result.text,
+		} as ResponseInputItem.FunctionCallOutput);
 	}
 
-	async cleanup() {
+	async processOutput(output: Array<ResponseOutputItem>): Promise<string> {
+		for (const item of output) {
+			if (item.type === 'function_call') {
+				await this.processToolCall(item);
+			} else {
+				return ((item as ResponseOutputMessage).content[0] as ResponseOutputText).text
+			}
+		}
+
+		const response = await LLMClient.call();
+		return this.processOutput(response.output);
+	}
+
+	async cleanup(): Promise<void> {
 		await this.mcp.close();
 	}
 }

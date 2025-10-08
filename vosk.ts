@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import process from 'process';
+import {magenta} from "console-log-colors";
 
 if (typeof process.env.VOSK_HOST_RU !== 'string' || typeof process.env.VOSK_HOST_UZ !== 'string') {
 	throw new Error('VOSK_HOST_RU or VOSK_HOST_UZ environment variable is missing');
@@ -70,15 +71,14 @@ class VoskClient {
 	}
 
 	async voiceToText(filePath: string): Promise<string> {
-		console.log(`Starting transcription for file: ${filePath}`);
+		console.log(`${magenta('[VOSK]')} Starting transcription for file: ${filePath}`);
 
 		try {
 			const ru = await this.runPython(filePath, process.env.VOSK_HOST_RU as string);
 			const uz = await this.runPython(filePath, process.env.VOSK_HOST_UZ as string);
 
-			console.log('Final results:');
-			console.log('RU:', ru.text, `(conf: ${ru.conf})`);
-			console.log('UZ:', uz.text, `(conf: ${uz.conf})`);
+			console.log(`${magenta('[VOSK]')} RU:`, ru.text, `(conf: ${ru.conf})`);
+			console.log(`${magenta('[VOSK]')} UZ:`, uz.text, `(conf: ${uz.conf})`);
 
 			if (!ru.text && !uz.text) {
 				throw new Error('No transcription result from either host');

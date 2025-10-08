@@ -4,24 +4,30 @@ import {ogaToWav} from "./utils.js";
 import path from 'path';
 import Vosk from "./vosk.js";
 import fs from "fs";
+import { unlink } from 'fs/promises';
+import {green, grey} from "console-log-colors";
 
 const handleMessage = async (ctx: any) => {
+	MCPClient.setTgId(ctx.update.message.chat.id);
+
 	const content = ctx.update.message.text;
-	console.log(`[USER] ${content}`)
+	console.log(`${grey('[USER]')} ${content}`)
+
 	if (content) {
-		await MCPClient.call('messages_post', {
-			role: 'user',
-			content
-		})
-
 		const answer = await MCPClient.processQuery(content, 1)
-		console.log(`[ASSISTANT] ${answer}`)
 
-		await ctx.reply(answer)
-		await MCPClient.call('messages_post', {
-			role: 'assistant',
-			content: answer
+		await ctx.reply(answer, {
+			reply_mode: 'MarkdownV2'
 		})
+
+		await MCPClient.call('messages_post', {
+			messages: [
+				{ role: 'user', content },
+				{ role: 'assistant', content: answer }
+			]
+		})
+
+		console.log(`${green('[ASSISTANT]')} ${answer}`)
 	}
 }
 
@@ -37,7 +43,13 @@ const handleAudio = async (ctx: any) => {
 		}
 
 		ctx.update.message.text = await Vosk.voiceToText(filePath);
-		await handleMessage(ctx)
+
+		if (fs.existsSync(filePath)) {
+			await unlink(filePath);
+			await handleMessage(ctx)
+		} else {
+			await handleMessage('Не удалось распознать сообщение')
+		}
 	}
 }
 
