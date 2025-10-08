@@ -11,8 +11,8 @@ import {
 	ResponseOutputMessage,
 	ResponseOutputText, ResponseOutputItem
 } from "openai/resources/responses/responses";
-import bot from "./bot.js";
 import {sendFileFromUrl} from "./utils.js";
+import config from "./config.js";
 
 interface MCPCallResult {
 	text: string;
@@ -23,6 +23,10 @@ class MCPClient {
 	private transport: StreamableHTTPClientTransport | null = null;
 	private tools: OpenAI.Responses.FunctionTool[] = [];
 	private tgId: number = 0;
+	private SYSTEM_MCP_CALLS: string[] = [
+		'messages_get',
+		'messages_post',
+	]
 
 	constructor() {
 		this.mcp = new Client({
@@ -70,19 +74,23 @@ class MCPClient {
 	}
 
 	async call(toolName: string, args: any): Promise<MCPCallResult> {
-		console.log(`${yellow('[MCP Call]')} ${toolName}: ${JSON.stringify(args)}`);
+		if (!this.SYSTEM_MCP_CALLS.includes(toolName)) {
+			console.log(`${yellow('[MCP Call]')} ${toolName}: ${JSON.stringify(args)}`);
+		}
 
 		const response = await this.mcp.callTool({
 			name: toolName,
 			arguments: args,
 			headers: {
-				"X-Telegram-Id": "1",
-				"X-Telegram-Name": "Ravil",
+				[config.headers.telegram_id]: this.tgId,
+				[config.headers.telegram_name]: "Ravil",
 			},
 		});
 
-		// @ts-ignore
-		console.log(`${yellow('[MCP Result]')} ${toolName}: ${JSON.stringify(response.content[0])}`);
+		if (!this.SYSTEM_MCP_CALLS.includes(toolName)) {
+			// @ts-ignore
+			console.log(`${yellow('[MCP Result]')} ${toolName}: ${JSON.stringify(response.content[0])}`);
+		}
 
 		// @ts-ignore
 		return response.content[0] as MCPCallResult;
