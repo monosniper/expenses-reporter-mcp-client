@@ -10,7 +10,7 @@ class LLM {
 	private readonly instructions: string;
 	private readonly model: string;
 	private messages: ResponseInput = [];
-	private tools: OpenAI.Responses.FunctionTool[] = [];
+	private tools: Array<OpenAI.Responses.Tool> = [];
 	private isPrevMessagesAdded: boolean = false;
 
 	constructor() {
@@ -43,13 +43,17 @@ class LLM {
 			wallets_delete — to delete a wallet.
 			Always use the user's last active wallet, unless otherwise specified.
 			For reports:
-			If a user requests a report, you must not only create it via reports_post if it does not already exist, but also retrieve it via reports_get using its ID.     
+			If a user requests a report, you must not only create it via reports_post if it does not already exist, but also retrieve it via reports_get using its ID.
 			reports_post — to create a report specifying the period and wallet.
 			reports_get — to get a ready-made report by ID.
 			The report file is sent to the user separately, do not add links or buttons.
 			If you need to perform several independent calls at the same time, for example, to get a list of categories and expenses, perform them in parallel using multi_tool_use.parallel.
 			For dialogue with the user, store messages using messages_post and, if necessary, get the history using messages_get.
 			Always confirm actions to the user in a friendly manner with emojis, using MarkdownV2 for formatting.
+			If the action involves using a tool (e.g., creating, receiving, updating, deleting, etc.),
+			you must call the appropriate tool.
+			Never write text such as “I'll try to do...” — perform the action directly.
+			If the tool is unavailable or the parameters are invalid, return an error in the form of tool_error, not text.
 		`.trim();
 	}
 
@@ -62,7 +66,7 @@ class LLM {
 		});
 	}
 
-	setTools(tools: OpenAI.Responses.FunctionTool[]): void {
+	setTools(tools: Array<OpenAI.Responses.Tool>): void {
 		this.tools = tools
 	}
 

@@ -12,28 +12,46 @@ const loggerUser = consola.withTag('USER')
 const loggerAssistant = consola.withTag('ASSISTANT')
 
 const handleMessage = async (ctx: any) => {
+	MCPClient.setCtx(ctx);
 	MCPClient.setTgId(ctx.update.message.chat.id);
+	MCPClient.setTgName(ctx.update.message.chat.first_name || ctx.update.message.chat.username);
 
 	const content = ctx.update.message.text;
-	loggerUser.info(grey(content))
+	loggerUser.info(grey(content));
 
-	if (content) {
-		const answer = await MCPClient.processQuery(content, 1)
+	if (!content) return;
 
-		await ctx.reply(answer, {
-			reply_mode: 'MarkdownV2'
-		})
+	const answer = await MCPClient.processQuery(content);
+
+	if (typeof answer === 'object' && answer.async) {
+		answer.promise.then(async (resolvedAnswer: string) => {
+			await ctx.reply(resolvedAnswer, { reply_mode: 'MarkdownV2' });
+
+			await MCPClient.call('messages_post', {
+				messages: [
+					{ role: 'user', content },
+					{ role: 'assistant', content: resolvedAnswer }
+				]
+			});
+
+			loggerAssistant.info(green(resolvedAnswer));
+		}).catch((err: any) => {
+			loggerAssistant.error('Ошибка при ожидании асинхронного ответа:', err);
+		});
+	} else {
+		await ctx.reply(answer, { reply_mode: 'MarkdownV2' });
 
 		await MCPClient.call('messages_post', {
 			messages: [
 				{ role: 'user', content },
 				{ role: 'assistant', content: answer }
 			]
-		})
+		});
 
-		loggerAssistant.info(green(answer))
+		loggerAssistant.info(green(answer));
 	}
-}
+};
+
 
 const handleAudio = async (ctx: any) => {
 	const voice = ctx.update.message.voice
