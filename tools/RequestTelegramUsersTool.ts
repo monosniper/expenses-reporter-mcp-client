@@ -22,7 +22,7 @@ class RequestTelegramUsersTool implements CustomTool {
 		delete this.promises[key]
 	}
 
-	async handle(ctx: any): Promise<object> {
+	async handle(input: any, ctx: any): Promise<object> {
 		await ctx.reply('Выберите пользователей для добавления в общий кошелек', {
 			reply_markup: {
 				keyboard: [

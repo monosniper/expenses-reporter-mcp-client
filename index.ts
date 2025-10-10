@@ -8,8 +8,6 @@ import RequestTelegramUsersTool from "./tools/RequestTelegramUsersTool.js";
 
 (async () => {
 	try {
-		await MCPClient.connect();
-
 		bot.on(message('voice'), handleAudio)
 		bot.on(message('text'), handleMessage)
 		bot.on('users_shared', (ctx) => {
@@ -21,7 +19,13 @@ import RequestTelegramUsersTool from "./tools/RequestTelegramUsersTool.js";
 			}
 		});
 
-		await bot.launch()
+		await bot.launch({
+			// @ts-ignore
+			webhook: {
+				domain: process.env.WEBHOOK_DOMAIN,
+				port: process.env.PORT,
+			},
+		})
 
 		process.once('SIGINT', () => bot.stop('SIGINT'))
 		process.once('SIGTERM', () => bot.stop('SIGTERM'))

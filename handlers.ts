@@ -12,15 +12,20 @@ const loggerUser = consola.withTag('USER')
 const loggerAssistant = consola.withTag('ASSISTANT')
 
 const handleMessage = async (ctx: any) => {
+	await MCPClient.connect();
+	const username = ctx.update.message.chat.first_name || ctx.update.message.chat.username;
 	MCPClient.setCtx(ctx);
 	MCPClient.setTgId(ctx.update.message.chat.id);
-	MCPClient.setTgName(ctx.update.message.chat.first_name || ctx.update.message.chat.username);
+	MCPClient.setTgName(username);
 
-	const content = ctx.update.message.text;
-	loggerUser.info(grey(content));
+	let content = ctx.update.message.text;
+	loggerUser.info(`${username}: ${grey(content)}`);
 
 	if (!content) return;
 
+	if (content === '/start') {
+		content = 'Поприветсвтуй меня и опиши что ты умеешь, что я могу с тобой делать, и примеры'
+	}
 	const answer = await MCPClient.processQuery(content);
 
 	if (typeof answer === 'object' && answer.async) {
@@ -37,6 +42,8 @@ const handleMessage = async (ctx: any) => {
 			loggerAssistant.info(green(resolvedAnswer));
 		}).catch((err: any) => {
 			loggerAssistant.error('Ошибка при ожидании асинхронного ответа:', err);
+		}).finally(() => {
+			MCPClient.cleanup()
 		});
 	} else {
 		await ctx.reply(answer, { reply_mode: 'MarkdownV2' });
@@ -47,6 +54,8 @@ const handleMessage = async (ctx: any) => {
 				{ role: 'assistant', content: answer }
 			]
 		});
+
+		await MCPClient.cleanup()
 
 		loggerAssistant.info(green(answer));
 	}

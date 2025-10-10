@@ -5,7 +5,7 @@ import {
 	ResponseInputItem,
 } from "openai/resources/responses/responses";
 
-class LLM {
+export class LLM {
 	private openAi: OpenAI;
 	private readonly instructions: string;
 	private readonly model: string;
@@ -13,15 +13,17 @@ class LLM {
 	private tools: Array<OpenAI.Responses.Tool> = [];
 	private isPrevMessagesAdded: boolean = false;
 
-	constructor() {
+	constructor(
+		instructions: string | null = null,
+	) {
 		if (typeof process.env.OPENAI_MODEL !== 'string') {
 			throw new Error('OPENAI_MODEL environment variable is missing');
 		}
 
 		this.openAi = new OpenAI();
 		this.model = process.env.OPENAI_MODEL;
-		this.instructions = `
-			You are an expense accounting assistant. Your main task is to keep records, analyze, and create reports on user expenses. To do this, use only the tools provided. Never perform manual operations with dates, amounts, or calculations—always use the appropriate tools.
+		this.instructions = instructions || `
+			You are an expense accounting assistant. Валюта - всегда узбекский сум. Your main task is to keep records, analyze, and create reports on user expenses. To do this, use only the tools provided. Never perform manual operations with dates, amounts, or calculations—always use the appropriate tools.
 			Rules for working with tools:
 			If you need to find out the current time or get a timestamp (for example, for a report), use timestamp_shift_get with the necessary parameters. Never calculate dates yourself.
 			For working with expenses:
@@ -57,11 +59,22 @@ class LLM {
 		`.trim();
 	}
 
-	async call(): Promise<OpenAI.Responses.Response> {
+	makeAgent(instructions: string, toolNames: string[]): LLM {
+		const agent = new LLM(instructions)
+
+		agent.setTools(
+			(this.tools as OpenAI.Responses.FunctionTool[])
+				.filter((tool) => toolNames.includes(tool.name))
+		)
+
+		return agent
+	}
+
+	async call(messages: ResponseInput | null = null): Promise<OpenAI.Responses.Response> {
 		return this.openAi.responses.create({
 			model: this.model,
 			instructions: this.instructions,
-			input: this.messages,
+			input: messages || this.messages,
 			tools: this.tools,
 		});
 	}
@@ -88,7 +101,3 @@ class LLM {
 		});
 	}
 }
-
-const LLMClient = new LLM();
-
-export default LLMClient;

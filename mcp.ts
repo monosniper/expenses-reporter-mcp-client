@@ -3,7 +3,7 @@ import {SSEClientTransport} from "@modelcontextprotocol/sdk/client/sse.js";
 import OpenAI from "openai";
 import { yellow, grey } from 'console-log-colors';
 import process from "process";
-import LLMClient from "./llm.js";
+import {LLM} from "./llm.js";
 import {consola, ConsolaInstance} from "consola";
 import {
 	ResponseInput,
@@ -17,6 +17,7 @@ import {ensureAdditionalPropertiesFalse, formatZodError, sendFileFromUrl} from "
 import config from "./config.js";
 import RequestTelegramUsersTool from "./tools/RequestTelegramUsersTool.js";
 import {CustomTool} from "./tools/CustomTool.js";
+import CategoryNormalizerTool from "./tools/CategoryNormalizerTool.js";
 
 interface MCPCallResult {
 	text: string;
@@ -29,6 +30,7 @@ class MCPClient {
 	private ctx: any;
 	private tgId: number = 0;
 	private tgName: string = '';
+	public agent: LLM;
 	private WITHOUT_HEADERS: string[] = [
 		'reports_delete',
 	];
@@ -42,19 +44,25 @@ class MCPClient {
 	]
 	private CUSTOM_TOOLS: CustomTool[] = [
 		RequestTelegramUsersTool,
+		CategoryNormalizerTool,
 	]
 	private logger: ConsolaInstance;
 
-	constructor() {
+	constructor(agent: LLM | null = null) {
 		this.mcp = new Client({
 			name: "mcp-client",
 			version: "1.0.0",
 		});
 		this.logger = consola.withTag('MCP')
+		this.agent = agent || new LLM();
 	}
 
 	setCtx(ctx: any) {
 		this.ctx = ctx;
+	}
+
+	setConnection(mcp: Client) {
+		this.mcp = mcp;
 	}
 
 	setTgId(id: number) {
@@ -73,7 +81,6 @@ class MCPClient {
 		try {
 			this.transport = new SSEClientTransport(new URL(process.env.MCP_URL));
 			await this.mcp.connect(this.transport);
-
 			const toolsResult = await this.mcp.listTools();
 
 			this.tools = toolsResult.tools.map((tool) => ({
@@ -92,30 +99,30 @@ class MCPClient {
 			})
 
 			this.logger.success('Connected to MCP server')
-			this.logger.box({
-				title: 'Tools',
-				message: (this.tools as OpenAI.Responses.FunctionTool[])
-					.map((t) => {
-						let desc = (t.description || '')
-							.replace(/\r?\n/g, ' ')
-							.replace(/\*\*/g, '')
-							.replace(/\s+/g, ' ')
-							.trim();
+			// this.logger.box({
+			// 	title: 'Tools',
+			// 	message: (this.tools as OpenAI.Responses.FunctionTool[])
+			// 		.map((t) => {
+			// 			let desc = (t.description || '')
+			// 				.replace(/\r?\n/g, ' ')
+			// 				.replace(/\*\*/g, '')
+			// 				.replace(/\s+/g, ' ')
+			// 				.trim();
+			//
+			// 			if (desc.length > 100) {
+			// 				desc = desc.slice(0, 60) + '…';
+			// 			}
+			//
+			// 			return `${yellow(t.name)} - ${grey(desc)}`;
+			// 		})
+			// 		.join('\n'),
+			// 	style: {
+			// 		padding: 1,
+			// 		borderColor: 'yellow',
+			// 	}
+			// })
 
-						if (desc.length > 100) {
-							desc = desc.slice(0, 60) + '…';
-						}
-
-						return `${yellow(t.name)} - ${grey(desc)}`;
-					})
-					.join('\n'),
-				style: {
-					padding: 1,
-					borderColor: 'yellow',
-				}
-			})
-
-			LLMClient.setTools(this.tools)
+			this.agent.setTools(this.tools)
 		} catch (e) {
 			throw new Error(`Failed to connect to MCP server: ${e}`);
 		}
@@ -123,15 +130,17 @@ class MCPClient {
 
 	async call(toolName: string, args: any): Promise<MCPCallResult> {
 		try {
+			const toolArgs = {
+				...args,
+				...(this.WITHOUT_HEADERS.includes(toolName) ? {} : {
+					// [`header_${config.headers.telegram_id.toLowerCase().replaceAll('-', '_')}`]: 998434034,
+					[`header_${config.headers.telegram_id.toLowerCase().replaceAll('-', '_')}`]: this.tgId,
+					[`header_${config.headers.telegram_name.toLowerCase().replaceAll('-', '_')}`]: this.tgName,
+				})
+			}
 			const response = await this.mcp.callTool({
 				name: toolName,
-				arguments: {
-					...args,
-					...(this.WITHOUT_HEADERS.includes(toolName) ? {} : {
-						[`header_${config.headers.telegram_id.toLowerCase().replaceAll('-', '_')}`]: this.tgId,
-						[`header_${config.headers.telegram_name.toLowerCase().replaceAll('-', '_')}`]: this.tgName,
-					}),
-				},
+				arguments: toolArgs,
 			});
 
 			// @ts-ignore
@@ -146,7 +155,7 @@ class MCPClient {
 					},
 					message: [
 						`ARGS:`,
-						grey(JSON.stringify(args, null, 2)),
+						grey(JSON.stringify(toolArgs, null, 2)),
 						``,
 						`Result:`,
 						grey(JSON.stringify(JSON.parse(result.text), null, 2))
@@ -166,7 +175,7 @@ class MCPClient {
 	}
 
 	async getPreviousMessages(): Promise<ResponseInput> {
-		const prevMessagesRaw = await this.call("messages_get", { limit: 9, tgId: 1 });
+		const prevMessagesRaw = await this.call("messages_get", { limit: 9 });
 
 		let prevMessages = [];
 		try {
@@ -183,65 +192,76 @@ class MCPClient {
 	}
 
 	async processQuery(query: string): Promise<string | any> {
-		LLMClient.addPrevMessages(await this.getPreviousMessages());
+		this.agent.addPrevMessages(await this.getPreviousMessages());
+		// console.log(await this.getPreviousMessages())
 
-		LLMClient.addMessage({
+		this.agent.addMessage({
 			role: 'user',
 			content: query
 		} as ResponseInputItem);
 
-		const response = await LLMClient.call();
+		const response = await this.agent.call();
 
 		const answer = await this.processOutput(response.output);
 
 		if (typeof answer === 'object' && answer.async) {
 			return { async: true, promise: answer.promise.then(async (rs: any) => {
-				LLMClient.addAssistantMessage(rs);
+					this.agent.addAssistantMessage(rs);
 				return rs;
 			})};
 		} else {
-			LLMClient.addAssistantMessage(answer);
+			this.agent.addAssistantMessage(answer);
 			return answer;
 		}
 	}
 
 	async processToolCall(item: ResponseFunctionToolCall): Promise<any | void> {
-		LLMClient.addMessage(item);
+		this.agent.addMessage(item);
 
 		let result = { text: '' };
 
 		const customTool = this.CUSTOM_TOOLS.find((customTool) => customTool.tool.name === item.name);
+		let args;
+		try {
+			args = JSON.parse(item.arguments);
+		} catch (e) {
+			args = {};
+		}
 
 		if (customTool) {
-			const promise = customTool.handle(this.ctx)
-				.then(rs => {
-					const resultText = JSON.stringify(rs);
+			try {
+				const promise = customTool.handle(args, this.ctx)
+					.then(rs => {
+						const resultText = JSON.stringify(rs);
 
-					LLMClient.addMessage({
-						type: 'function_call_output',
-						call_id: item.call_id,
-						output: resultText,
+						this.agent.addMessage({
+							type: 'function_call_output',
+							call_id: item.call_id,
+							output: resultText,
+						});
+					})
+					.catch(err => {
+						const errorText = JSON.stringify({ error: err.message });
+
+						this.agent.addMessage({
+							type: 'function_call_output',
+							call_id: item.call_id,
+							output: errorText,
+						});
 					});
-				})
-				.catch(err => {
-					const errorText = JSON.stringify({ error: err.message });
 
-					LLMClient.addMessage({
-						type: 'function_call_output',
-						call_id: item.call_id,
-						output: errorText,
-					});
-				});
-
-			return { async: true, promise };
+				return { async: true, promise };
+			} catch (err: any) {
+				this.logger.error(err)
+			}
 		} else {
-			result = await this.call(item.name, JSON.parse(item.arguments));
+			result = await this.call(item.name, args);
 			const jsonResult = JSON.parse(result.text)
 
 			if (jsonResult.hasOwnProperty("type") && jsonResult.hasOwnProperty("url")) {
 				try	{
 					await sendFileFromUrl(this.tgId, jsonResult.url);
-					await this.call('reports_delete', { id: JSON.parse(item.arguments).id })
+					await this.call('reports_delete', { id: args.id })
 					result.text = 'Файл успешно отправлен пользователю'
 				} catch {
 					result.text = `Не удалось скачать файл. Вот прямая ссылка - ${jsonResult.url}`
@@ -249,7 +269,7 @@ class MCPClient {
 			}
 		}
 
-		LLMClient.addMessage({
+		this.agent.addMessage({
 			type: 'function_call_output',
 			call_id: item.call_id,
 			output: result.text,
@@ -263,11 +283,11 @@ class MCPClient {
 
 				if (typeof result === 'object' && result.async) {
 					return { async: true, promise: result.promise.then(async () => {
-						const response = await LLMClient.call();
+						const response = await this.agent.call();
 						return this.processOutput(response.output);
 					})};
 				} else {
-					const response = await LLMClient.call();
+					const response = await this.agent.call();
 					return this.processOutput(response.output);
 				}
 			}
@@ -278,8 +298,20 @@ class MCPClient {
 			}
 		}
 
-		const response = await LLMClient.call();
+		const response = await this.agent.call();
 		return this.processOutput(response.output);
+	}
+
+	makeChildProcess(instructions: string, toolNames: string[]): MCPClient {
+		const agent = this.agent.makeAgent(instructions, toolNames)
+		const childClient = new MCPClient(agent);
+
+		childClient.setConnection(this.mcp);
+		childClient.setCtx(this.ctx);
+		childClient.setTgName(this.tgName);
+		childClient.setTgId(this.tgId);
+
+		return childClient;
 	}
 
 	async cleanup(): Promise<void> {
