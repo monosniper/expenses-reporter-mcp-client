@@ -4,7 +4,7 @@
   "main": "app.js",
   "scripts": {
     "build": "tsc && chmod 755 build/index.js",
-    "build-prod": "tsc && chmod 755 build/index.js",
+    "build-prod": "chmod 755 build/index.js",
     "start": "node build/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
